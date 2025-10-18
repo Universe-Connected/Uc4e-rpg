@@ -23,7 +23,6 @@ jobs:
         run: |
           rm -rf universe_connected
           flutter create universe_connected
-          echo "Flutter version:"
           flutter --version
 
       - name: Write project files
@@ -34,22 +33,22 @@ jobs:
           name: universe_connected
           description: Primordial Spark prototype for Universe Connected
           publish_to: "none"
-          version: 0.0.1+1
+          version: 0.0.2+1
 
           environment:
-            sdk: ">=3.3.0 <4.0.0"
+            sdk: ">=3.5.0 <4.0.0"
 
           dependencies:
             flutter:
               sdk: flutter
-            flame: ^1.10.0
-            flame_audio: ^2.0.4
-            flutter_svg: ^2.0.9
+            flame: ^1.32.0
+            flame_audio: ^2.11.10
+            flutter_svg: ^2.2.1
 
           dev_dependencies:
             flutter_test:
               sdk: flutter
-            flutter_lints: ^4.0.0
+            flutter_lints: ^6.0.0
 
           flutter:
             uses-material-design: true
@@ -64,10 +63,10 @@ jobs:
           cat > lib/util/colors.dart <<'EOF'
           import 'package:flutter/material.dart';
           class UCColors {
-            static const bgDeep = Color(0xFF080A10);      // scientific-dark ocean
+            static const bgDeep = Color(0xFF080A10);
             static const bgDeep2 = Color(0xFF0B1220);
-            static const neonBlue = Color(0xFF60A5FA);    // quantum accents
-            static const neonGreen = Color(0xFF34D399);   // bioluminescent life
+            static const neonBlue = Color(0xFF60A5FA);
+            static const neonGreen = Color(0xFF34D399);
             static const neonTeal = Color(0xFF10B981);
             static const softText = Color(0xFFEAEEFF);
             static const hintText = Color(0xFF93C5FD);
@@ -100,7 +99,7 @@ jobs:
           import 'scenes/primordial_scene.dart';
 
           class ConnectedGame extends FlameGame
-              with HasTappables, HasDraggables, HasCollisionDetection {
+              with HasCollisionDetection, HasKeyboardHandlerComponents {
             @override
             Color backgroundColor() => UCColors.bgDeep;
 
@@ -139,17 +138,11 @@ jobs:
               final bg = RectangleComponent(
                 size: size,
                 paint: Paint()
-                  ..shader = Gradient.radial(
-                    size / 2,
-                    UCColors.bgDeep2,
-                    UCColors.bgDeep,
-                  ),
+                  ..shader = RadialGradient(
+                    colors: [UCColors.bgDeep2, UCColors.bgDeep],
+                  ).createShader(Rect.fromLTWH(0, 0, size.x, size.y)),
               );
               add(bg);
-
-              // Ambient audio optional:
-              // await FlameAudio.bgm.initialize();
-              // await FlameAudio.bgm.play('ambient_primordial.ogg', volume: .35);
 
               reactions = ReactionSystem(
                 onAminoSynthesized: _onAmino,
@@ -204,16 +197,11 @@ jobs:
 
             static Color _colorFor(MoleculeType k) {
               switch (k) {
-                case MoleculeType.H2:
-                  return const Color(0xFF7DD3FC);
-                case MoleculeType.CH4:
-                  return const Color(0xFFA7F3D0);
-                case MoleculeType.NH3:
-                  return const Color(0xFFFDE68A);
-                case MoleculeType.CO2:
-                  return const Color(0xFFFCA5A5);
-                case MoleculeType.H2O:
-                  return const Color(0xFF93C5FD);
+                case MoleculeType.H2: return const Color(0xFF7DD3FC);
+                case MoleculeType.CH4: return const Color(0xFFA7F3D0);
+                case MoleculeType.NH3: return const Color(0xFFFDE68A);
+                case MoleculeType.CO2: return const Color(0xFFFCA5A5);
+                case MoleculeType.H2O: return const Color(0xFF93C5FD);
               }
             }
 
@@ -247,35 +235,33 @@ jobs:
           cat > lib/game/components/lightning.dart <<'EOF'
           import 'dart:ui';
           import 'package:flame/components.dart';
-          import 'package:flutter/gestures.dart';
+          import 'package:flame/events.dart';
           import '../../util/colors.dart';
 
           typedef StrikeCallback = void Function(List<Vector2> polyline);
 
-          class LightningController extends PositionComponent with Draggable {
+          class LightningController extends PositionComponent
+              with DragCallbacks, HasGameRef {
             final StrikeCallback onStrike;
             final List<Vector2> _points = [];
 
             LightningController({required this.onStrike});
 
             @override
-            bool onDragStart(DragStartInfo info) {
+            void onDragStart(DragStartEvent event) {
               _points.clear();
-              _points.add(info.eventPosition.game);
-              return true;
+              _points.add(event.localPosition);
             }
 
             @override
-            bool onDragUpdate(DragUpdateInfo info) {
-              _points.add(info.eventPosition.game);
-              return true;
+            void onDragUpdate(DragUpdateEvent event) {
+              _points.add(event.localPosition);
             }
 
             @override
-            bool onDragEnd(DragEndInfo info) {
+            void onDragEnd(DragEndEvent event) {
               if (_points.length > 2) onStrike(List.of(_points));
               _points.clear();
-              return true;
             }
 
             @override
@@ -298,7 +284,6 @@ jobs:
           import 'dart:ui';
           import 'package:flame/components.dart';
           import 'package:flame/effects.dart';
-          import 'package:flutter/painting.dart';
           import '../../util/colors.dart';
 
           class Protocell extends CircleComponent {
@@ -344,10 +329,7 @@ jobs:
             int aminoCount = 0;
             final _rng = Random();
 
-            ReactionSystem({
-              required this.onAminoSynthesized,
-              required this.onProtocellBorn,
-            });
+            ReactionSystem({required this.onAminoSynthesized, required this.onProtocellBorn});
 
             void onStrike(List<Vector2> boltPath) {
               final molecules = game.children.whereType<Molecule>().toList();
@@ -359,7 +341,7 @@ jobs:
                   if (d < m.radius + 10) { hits++; break; }
                 }
               }
-              final made = (hits / 5).floor(); // ~5 hits → 1 amino acid
+              final made = (hits / 5).floor();
               if (made > 0) {
                 aminoCount += made;
                 onAminoSynthesized(aminoCount);
@@ -454,5 +436,5 @@ jobs:
           cp -r universe_connected/* .
           rm -rf universe_connected
           git add .
-          git commit -m "Scaffold Universe Connected project and first playable prototype"
+          git commit -m "Scaffold Universe Connected project and fix build for Flutter 3.24"
           git push
