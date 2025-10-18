@@ -1,0 +1,458 @@
+name: Scaffold & Build (one-time)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scaffold-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Create Flutter project skeleton
+        run: |
+          rm -rf universe_connected
+          flutter create universe_connected
+          echo "Flutter version:"
+          flutter --version
+
+      - name: Write project files
+        working-directory: universe_connected
+        run: |
+          # pubspec.yaml
+          cat > pubspec.yaml <<'EOF'
+          name: universe_connected
+          description: Primordial Spark prototype for Universe Connected
+          publish_to: "none"
+          version: 0.0.1+1
+
+          environment:
+            sdk: ">=3.3.0 <4.0.0"
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            flame: ^1.10.0
+            flame_audio: ^2.0.4
+            flutter_svg: ^2.0.9
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^4.0.0
+
+          flutter:
+            uses-material-design: true
+            assets:
+              - assets/images/
+              - assets/audio/
+          EOF
+
+          mkdir -p assets/images assets/audio lib/game/components lib/game/scenes lib/game/systems lib/game/ui lib/util
+
+          # lib/util/colors.dart
+          cat > lib/util/colors.dart <<'EOF'
+          import 'package:flutter/material.dart';
+          class UCColors {
+            static const bgDeep = Color(0xFF080A10);      // scientific-dark ocean
+            static const bgDeep2 = Color(0xFF0B1220);
+            static const neonBlue = Color(0xFF60A5FA);    // quantum accents
+            static const neonGreen = Color(0xFF34D399);   // bioluminescent life
+            static const neonTeal = Color(0xFF10B981);
+            static const softText = Color(0xFFEAEEFF);
+            static const hintText = Color(0xFF93C5FD);
+          }
+          EOF
+
+          # lib/main.dart
+          cat > lib/main.dart <<'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:flame/game.dart';
+          import 'game/connected_game.dart';
+
+          void main() async {
+            WidgetsFlutterBinding.ensureInitialized();
+            await SystemChrome.setPreferredOrientations([
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]);
+            runApp(GameWidget(game: ConnectedGame()));
+          }
+          EOF
+
+          # lib/game/connected_game.dart
+          cat > lib/game/connected_game.dart <<'EOF'
+          import 'package:flame/game.dart';
+          import 'package:flame/input.dart';
+          import 'package:flutter/material.dart';
+          import '../util/colors.dart';
+          import 'scenes/primordial_scene.dart';
+
+          class ConnectedGame extends FlameGame
+              with HasTappables, HasDraggables, HasCollisionDetection {
+            @override
+            Color backgroundColor() => UCColors.bgDeep;
+
+            @override
+            Future<void> onLoad() async {
+              await add(PrimordialScene(size));
+            }
+          }
+          EOF
+
+          # lib/game/scenes/primordial_scene.dart
+          cat > lib/game/scenes/primordial_scene.dart <<'EOF'
+          import 'dart:math';
+          import 'package:flame/components.dart';
+          import 'package:flame/effects.dart';
+          import 'package:flame_audio/flame_audio.dart';
+          import '../components/molecule.dart';
+          import '../components/lightning.dart';
+          import '../components/protocell.dart';
+          import '../systems/reaction_system.dart';
+          import '../ui/hud.dart';
+          import '../../util/colors.dart';
+
+          class PrimordialScene extends PositionComponent with HasGameRef {
+            final Vector2 worldSize;
+            PrimordialScene(this.worldSize);
+
+            late ReactionSystem reactions;
+            late Hud hud;
+            final _rng = Random();
+
+            @override
+            Future<void> onLoad() async {
+              size = worldSize;
+
+              final bg = RectangleComponent(
+                size: size,
+                paint: Paint()
+                  ..shader = Gradient.radial(
+                    size / 2,
+                    UCColors.bgDeep2,
+                    UCColors.bgDeep,
+                  ),
+              );
+              add(bg);
+
+              // Ambient audio optional:
+              // await FlameAudio.bgm.initialize();
+              // await FlameAudio.bgm.play('ambient_primordial.ogg', volume: .35);
+
+              reactions = ReactionSystem(
+                onAminoSynthesized: _onAmino,
+                onProtocellBorn: _onProtocell,
+              );
+              add(reactions);
+
+              for (int i = 0; i < 40; i++) {
+                final pos = Vector2(
+                  _rng.nextDouble() * size.x,
+                  _rng.nextDouble() * size.y,
+                );
+                add(Molecule.randomAt(pos));
+              }
+
+              add(LightningController(onStrike: reactions.onStrike));
+
+              hud = Hud();
+              add(hud);
+            }
+
+            void _onAmino(int total) => hud.updateAmino(total);
+
+            Future<void> _onProtocell(Vector2 at) async {
+              final cell = Protocell(at);
+              await add(cell);
+              await cell.bloom();
+              hud.showMilestone('Protocell formed');
+            }
+          }
+          EOF
+
+          # lib/game/components/molecule.dart
+          cat > lib/game/components/molecule.dart <<'EOF'
+          import 'dart:math';
+          import 'package:flame/components.dart';
+          import 'package:flutter/painting.dart';
+
+          enum MoleculeType { H2, CH4, NH3, CO2, H2O }
+
+          class Molecule extends CircleComponent with HasGameRef {
+            MoleculeType kind;
+            Vector2 velocity;
+            final Paint _paint;
+            static final _rng = Random();
+
+            Molecule(this.kind, Vector2 position)
+                : velocity = (Vector2.random(_rng) - Vector2.all(.5))
+                    ..scale(40 + _rng.nextDouble() * 60),
+                  _paint = Paint()..color = _colorFor(kind),
+                  super(radius: 6, position: position, anchor: Anchor.center);
+
+            static Color _colorFor(MoleculeType k) {
+              switch (k) {
+                case MoleculeType.H2:
+                  return const Color(0xFF7DD3FC);
+                case MoleculeType.CH4:
+                  return const Color(0xFFA7F3D0);
+                case MoleculeType.NH3:
+                  return const Color(0xFFFDE68A);
+                case MoleculeType.CO2:
+                  return const Color(0xFFFCA5A5);
+                case MoleculeType.H2O:
+                  return const Color(0xFF93C5FD);
+              }
+            }
+
+            static Molecule randomAt(Vector2 p) {
+              final values = MoleculeType.values;
+              return Molecule(values[_rng.nextInt(values.length)], p);
+            }
+
+            @override
+            void update(double dt) {
+              super.update(dt);
+              position += velocity * dt;
+              if (position.x < 0 || position.x > game.size.x) velocity.x *= -1;
+              if (position.y < 0 || position.y > game.size.y) velocity.y *= -1;
+              angle += velocity.length * 0.0008 * dt;
+            }
+
+            @override
+            void render(Canvas c) {
+              c.drawCircle(Offset.zero, radius, _paint);
+              final glow = Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 1.5
+                ..color = _paint.color.withOpacity(.35);
+              c.drawCircle(Offset.zero, radius + 2, glow);
+            }
+          }
+          EOF
+
+          # lib/game/components/lightning.dart
+          cat > lib/game/components/lightning.dart <<'EOF'
+          import 'dart:ui';
+          import 'package:flame/components.dart';
+          import 'package:flutter/gestures.dart';
+          import '../../util/colors.dart';
+
+          typedef StrikeCallback = void Function(List<Vector2> polyline);
+
+          class LightningController extends PositionComponent with Draggable {
+            final StrikeCallback onStrike;
+            final List<Vector2> _points = [];
+
+            LightningController({required this.onStrike});
+
+            @override
+            bool onDragStart(DragStartInfo info) {
+              _points.clear();
+              _points.add(info.eventPosition.game);
+              return true;
+            }
+
+            @override
+            bool onDragUpdate(DragUpdateInfo info) {
+              _points.add(info.eventPosition.game);
+              return true;
+            }
+
+            @override
+            bool onDragEnd(DragEndInfo info) {
+              if (_points.length > 2) onStrike(List.of(_points));
+              _points.clear();
+              return true;
+            }
+
+            @override
+            void render(Canvas c) {
+              if (_points.length < 2) return;
+              final p = Path()..moveTo(_points.first.x, _points.first.y);
+              for (final v in _points.skip(1)) { p.lineTo(v.x, v.y); }
+              final paint = Paint()
+                ..color = UCColors.neonBlue
+                ..strokeWidth = 3
+                ..style = PaintingStyle.stroke
+                ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+              c.drawPath(p, paint);
+            }
+          }
+          EOF
+
+          # lib/game/components/protocell.dart
+          cat > lib/game/components/protocell.dart <<'EOF'
+          import 'dart:ui';
+          import 'package:flame/components.dart';
+          import 'package:flame/effects.dart';
+          import 'package:flutter/painting.dart';
+          import '../../util/colors.dart';
+
+          class Protocell extends CircleComponent {
+            Protocell(Vector2 at)
+                : super(
+                    radius: 10,
+                    position: at,
+                    anchor: Anchor.center,
+                    paint: Paint()..color = UCColors.neonGreen,
+                  );
+
+            Future<void> bloom() async {
+              add(ScaleEffect.to(
+                Vector2.all(2.4),
+                EffectController(duration: 0.8, curve: Curves.easeOut),
+              ));
+              await Future<void>.delayed(const Duration(milliseconds: 850));
+              add(OpacityEffect.to(0.85, EffectController(duration: 0.6)));
+              add(ScaleEffect.to(Vector2.all(2.0), EffectController(duration: 0.6)));
+            }
+
+            @override
+            void render(Canvas c) {
+              super.render(c);
+              final ring = Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 3
+                ..color = UCColors.neonTeal;
+              c.drawCircle(Offset.zero, radius + 4, ring);
+            }
+          }
+          EOF
+
+          # lib/game/systems/reaction_system.dart
+          cat > lib/game/systems/reaction_system.dart <<'EOF'
+          import 'dart:math';
+          import 'package:flame/components.dart';
+          import '../components/molecule.dart';
+
+          class ReactionSystem extends Component with HasGameRef {
+            final void Function(int totalAmino) onAminoSynthesized;
+            final Future<void> Function(Vector2 at) onProtocellBorn;
+            int aminoCount = 0;
+            final _rng = Random();
+
+            ReactionSystem({
+              required this.onAminoSynthesized,
+              required this.onProtocellBorn,
+            });
+
+            void onStrike(List<Vector2> boltPath) {
+              final molecules = game.children.whereType<Molecule>().toList();
+              int hits = 0;
+              for (final m in molecules) {
+                for (int i = 0; i < boltPath.length - 1; i++) {
+                  final a = boltPath[i], b = boltPath[i + 1];
+                  final d = _distancePointToSegment(m.position, a, b);
+                  if (d < m.radius + 10) { hits++; break; }
+                }
+              }
+              final made = (hits / 5).floor(); // ~5 hits → 1 amino acid
+              if (made > 0) {
+                aminoCount += made;
+                onAminoSynthesized(aminoCount);
+                for (int k = 0; k < made; k++) {
+                  final p = boltPath[_rng.nextInt(boltPath.length)];
+                  _scatter(molecules, p, 120);
+                }
+                if (aminoCount >= 10) {
+                  aminoCount = 0;
+                  onProtocellBorn(boltPath.last);
+                }
+              }
+            }
+
+            void _scatter(List<Molecule> mols, Vector2 center, double force) {
+              for (final m in mols) {
+                final v = m.position - center;
+                final len = v.length + 0.001;
+                m.velocity += (v / len)..scale(force / len);
+              }
+            }
+
+            double _distancePointToSegment(Vector2 p, Vector2 a, Vector2 b) {
+              final ab = b - a;
+              final t = ((p - a).dot(ab) / (ab.length2)).clamp(0.0, 1.0);
+              final proj = a + ab * t;
+              return (p - proj).length;
+            }
+          }
+          EOF
+
+          # lib/game/ui/hud.dart
+          cat > lib/game/ui/hud.dart <<'EOF'
+          import 'package:flame/components.dart';
+          import '../../util/colors.dart';
+
+          class Hud extends PositionComponent with HasGameRef {
+            late TextComponent aminoText;
+            late TextComponent milestone;
+
+            @override
+            Future<void> onLoad() async {
+              position = Vector2(16, 16);
+              aminoText = TextComponent(
+                text: 'Amino: 0',
+                textRenderer: TextPaint(
+                  style: const TextStyle(color: UCColors.softText, fontSize: 16),
+                ),
+              );
+              add(aminoText);
+
+              milestone = TextComponent(
+                text: '',
+                position: Vector2(0, 28),
+                textRenderer: TextPaint(
+                  style: const TextStyle(color: UCColors.hintText, fontSize: 14),
+                ),
+              );
+              add(milestone);
+            }
+
+            void updateAmino(int value) {
+              aminoText.text = 'Amino: $value';
+            }
+
+            void showMilestone(String msg) {
+              milestone.text = msg;
+              Future.delayed(const Duration(seconds: 2), () { milestone.text = ''; });
+            }
+          }
+          EOF
+
+      - name: Get packages & Build APK
+        working-directory: universe_connected
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: universe_connected-apk
+          path: universe_connected/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Commit project files to repo
+        working-directory: universe_connected
+        run: |
+          git config user.name "uc4e-bot"
+          git config user.email "bot@example.com"
+          cd ..
+          rm -rf .git/hooks
+          cp -r universe_connected/* .
+          rm -rf universe_connected
+          git add .
+          git commit -m "Scaffold Universe Connected project and first playable prototype"
+          git push
